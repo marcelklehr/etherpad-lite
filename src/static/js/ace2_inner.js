@@ -200,6 +200,11 @@ function Ace2Inner(){
 
   var authorInfos = {}; // presence of key determines if author is present in doc
 
+  function getAuthorInfos(){
+    return authorInfos;
+  };
+  editorInfo.ace_getAuthorInfos= getAuthorInfos;
+
   function setAuthorInfo(author, info)
   {
     if ((typeof author) != "string")
@@ -884,7 +889,14 @@ function Ace2Inner(){
   editorInfo.ace_setEditable = setEditable;
   editorInfo.ace_execCommand = execCommand;
   editorInfo.ace_replaceRange = replaceRange;
-
+  editorInfo.ace_getAuthorInfos= getAuthorInfos;
+  editorInfo.ace_performDocumentReplaceRange = performDocumentReplaceRange;
+  editorInfo.ace_performDocumentReplaceCharRange = performDocumentReplaceCharRange;
+  editorInfo.ace_renumberList = renumberList;
+  editorInfo.ace_doReturnKey = doReturnKey;
+  editorInfo.ace_isBlockElement = isBlockElement;
+  editorInfo.ace_getLineListType = getLineListType;
+  
   editorInfo.ace_callWithAce = function(fn, callStack, normalize)
   {
     var wrapper = function()
@@ -1161,7 +1173,7 @@ function Ace2Inner(){
     //if (! top.BEFORE) top.BEFORE = [];
     //top.BEFORE.push(magicdom.root.dom.innerHTML);
     //if (! isEditable) return; // and don't reschedule
-    if (inInternationalComposition)
+    if (window.parent.parent.inInternationalComposition)
     {
       // don't do idle input incorporation during international input composition
       idleWorkTimer.atLeast(500);
@@ -1486,7 +1498,6 @@ function Ace2Inner(){
 
     if (currentCallStack.domClean) return false;
 
-    inInternationalComposition = false; // if we need the document normalized, so be it
     currentCallStack.isUserChange = true;
 
     isTimeUp = (isTimeUp ||
@@ -1686,11 +1697,27 @@ function Ace2Inner(){
     if (selection && !selStart)
     {
       //if (domChanges) dmesg("selection not collected");
-      selStart = getLineAndCharForPoint(selection.startPoint);
+      var selStartFromHook = hooks.callAll('aceStartLineAndCharForPoint', {
+        callstack: currentCallStack,
+        editorInfo: editorInfo,
+        rep: rep,
+        root:root,
+        point:selection.startPoint,
+        documentAttributeManager: documentAttributeManager
+      });	
+      selStart = (selStartFromHook==null||selStartFromHook.length==0)?getLineAndCharForPoint(selection.startPoint):selStartFromHook;
     }
     if (selection && !selEnd)
     {
-      selEnd = getLineAndCharForPoint(selection.endPoint);
+      var selEndFromHook = hooks.callAll('aceEndLineAndCharForPoint', {
+        callstack: currentCallStack,
+        editorInfo: editorInfo,
+        rep: rep,
+        root:root,
+        point:selection.endPoint,
+        documentAttributeManager: documentAttributeManager
+      });
+      selEnd = (selEndFromHook==null||selEndFromHook.length==0)?getLineAndCharForPoint(selection.endPoint):selEndFromHook;		                      
     }
 
     // selection from content collection can, in various ways, extend past final
@@ -1845,17 +1872,20 @@ function Ace2Inner(){
   {
     return rep.selStart[0];
   }
-
+  editorInfo.ace_caretLine = caretLine;
+  
   function caretColumn()
   {
     return rep.selStart[1];
   }
-
+  editorInfo.ace_caretColumn = caretColumn;
+  
   function caretDocChar()
   {
     return rep.lines.offsetOfIndex(caretLine()) + caretColumn();
   }
-
+  editorInfo.ace_caretDocChar = caretDocChar;
+  
   function handleReturnIndentation()
   {
     // on return, indent to level of previous line
@@ -3447,7 +3477,8 @@ function Ace2Inner(){
   {
     return !!REGEX_WORDCHAR.exec(c);
   }
-
+  editorInfo.ace_isWordChar = isWordChar;
+  
   function isSpaceChar(c)
   {
     return !!REGEX_SPACE.exec(c);
@@ -3555,7 +3586,15 @@ function Ace2Inner(){
 
       if (!stopped)
       {
-        if (isTypeForSpecialKey && keyCode == 8)
+        var specialHandledInHook = hooks.callAll('aceKeyEvent', {
+          callstack: currentCallStack,
+          editorInfo: editorInfo,
+          rep: rep,
+          documentAttributeManager: documentAttributeManager,
+          evt:evt
+        });
+        specialHandled = (specialHandledInHook&&specialHandledInHook.length>0)?specialHandledInHook[0]:specialHandled;
+        if ((!specialHandled) && isTypeForSpecialKey && keyCode == 8)
         {
           // "delete" key; in mozilla, if we're at the beginning of a line, normalize now,
           // or else deleting a blank line can take two delete presses.
@@ -3690,7 +3729,7 @@ function Ace2Inner(){
         thisKeyDoesntTriggerNormalize = true;
       }
 
-      if ((!specialHandled) && (!thisKeyDoesntTriggerNormalize) && (!inInternationalComposition))
+      if ((!specialHandled) && (!thisKeyDoesntTriggerNormalize) && (!window.parent.parent.inInternationalComposition))
       {
         if (type != "keyup" || !incorpIfQuick())
         {
@@ -4550,19 +4589,9 @@ function Ace2Inner(){
     }
   }
 
-  var inInternationalComposition = false;
-
   function handleCompositionEvent(evt)
   {
-    // international input events, fired in FF3, at least;  allow e.g. Japanese input
-    if (evt.type == "compositionstart")
-    {
-      inInternationalComposition = true;
-    }
-    else if (evt.type == "compositionend")
-    {
-      inInternationalComposition = false;
-    }
+      window.parent.parent.handleCompositionEvent(evt);
   }
 
   function bindTheEventHandlers()
@@ -4577,7 +4606,8 @@ function Ace2Inner(){
       $(document).on("click", handleIEOuterClick);
     }
     if (browser.msie) $(root).on("paste", handleIEPaste);
-    if ((!browser.msie) && document.documentElement)
+    // CompositionEvent is not implemented below IE version 8
+    if ( !(browser.msie && browser.version < 9) && document.documentElement)
     {
       $(document.documentElement).on("compositionstart", handleCompositionEvent);
       $(document.documentElement).on("compositionend", handleCompositionEvent);
